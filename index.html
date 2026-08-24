@@ -275,6 +275,31 @@ let holidays = store.load('holidays', []);
 
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
+// Curso escolar: del 9 de septiembre al 20 de junio del año siguiente.
+// Si estamos entre enero y junio, el curso empezó en septiembre del año anterior.
+function schoolYearRange(){
+  const now = new Date();
+  const startYear = now.getMonth() <= 5 ? now.getFullYear()-1 : now.getFullYear();
+  const start = new Date(startYear, 8, 9);       // 9 septiembre
+  const end = new Date(startYear+1, 5, 20);      // 20 junio
+  return { start, end };
+}
+// Primera fecha, a partir de "from", que cae en el día de la semana dayIndex (0=Lun...4=Vie)
+function firstOccurrence(from, dayIndex){
+  const d = new Date(from);
+  const fromDow = (d.getDay()+6)%7; // Lun=0...Dom=6
+  let diff = dayIndex - fromDow;
+  if(diff < 0) diff += 7;
+  d.setDate(d.getDate()+diff);
+  return d;
+}
+function untilStamp(date){
+  const end = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 23,59,59));
+  return end.toISOString().replace(/[-:]/g,'').split('.')[0] + 'Z';
+}
+function pad2(n){ return n.toString().padStart(2,'0'); }
+function formatLocalDate(d){ return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+
 // ---------- GOOGLE CALENDAR ----------
 let gTokenClient = null;
 let gAccessToken = null;
@@ -486,24 +511,23 @@ document.getElementById('syncGoogleBtn').addEventListener('click', async ()=>{
   const btn = document.getElementById('syncGoogleBtn');
   btn.textContent = 'Sincronizando…'; btn.disabled = true;
   try{
-    const today = new Date();
-    const monday = new Date(today);
-    monday.setDate(today.getDate() - ((today.getDay()+6)%7));
+    const { start: schoolStart, end: schoolEnd } = schoolYearRange();
+    const untilStr = untilStamp(schoolEnd);
 
-    // Horario -> eventos semanales recurrentes
+    // Horario -> eventos semanales recurrentes, del 9 de septiembre al 20 de junio
     for(const [key, data] of Object.entries(schedule)){
       if(data.googleEventId) continue;
       const [di, hi] = key.split('-').map(Number);
       const h = hours[hi]; if(!h) continue;
-      const classDate = new Date(monday); classDate.setDate(monday.getDate()+di);
-      const dateStr = classDate.toISOString().slice(0,10);
+      const classDate = firstOccurrence(schoolStart, di);
+      const dateStr = formatLocalDate(classDate);
       const [hh,mm] = h.split(':');
       const endH = ((parseInt(hh,10)+1)%24).toString().padStart(2,'0');
       const resource = {
         summary: data.subject + (data.room ? ' (' + data.room + ')' : ''),
         start: { dateTime: `${dateStr}T${hh}:${mm}:00`, timeZone: TZ },
         end: { dateTime: `${dateStr}T${endH}:${mm}:00`, timeZone: TZ },
-        recurrence: ['RRULE:FREQ=WEEKLY;COUNT=16']
+        recurrence: ['RRULE:FREQ=WEEKLY;UNTIL=' + untilStr]
       };
       const created = await gCreateEvent(resource);
       data.googleEventId = created.id;
@@ -727,25 +751,22 @@ function icsDateTime(dateStr, timeStr){
 document.getElementById('exportIcs').addEventListener('click', ()=>{
   let ics = 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Cuaderno Agenda//ES\r\nCALSCALE:GREGORIAN\r\n';
 
-  const today = new Date();
-  const monday = new Date(today);
-  const diffToMon = (today.getDay()+6)%7;
-  monday.setDate(today.getDate()-diffToMon);
+  const { start: schoolStart, end: schoolEnd } = schoolYearRange();
+  const untilStr = untilStamp(schoolEnd);
 
   Object.entries(schedule).forEach(([key,data])=>{
     const [di,hi] = key.split('-').map(Number);
     const h = hours[hi];
     if(!h) return;
-    const classDate = new Date(monday);
-    classDate.setDate(monday.getDate()+di);
-    const dateStr = classDate.toISOString().slice(0,10);
+    const classDate = firstOccurrence(schoolStart, di);
+    const dateStr = formatLocalDate(classDate);
     const [hh,mm] = h.split(':');
     const endH = pad((parseInt(hh,10)+1)%24);
     ics += 'BEGIN:VEVENT\r\n';
     ics += 'UID:' + uid() + '@cuaderno\r\n';
     ics += 'DTSTART:' + icsDateTime(dateStr, h) + '\r\n';
     ics += 'DTEND:' + icsDateTime(dateStr, endH+':'+mm) + '\r\n';
-    ics += 'RRULE:FREQ=WEEKLY;COUNT=16\r\n';
+    ics += 'RRULE:FREQ=WEEKLY;UNTIL=' + untilStr + '\r\n';
     ics += 'SUMMARY:' + data.subject + (data.room? ' (' + data.room + ')' : '') + '\r\n';
     ics += 'END:VEVENT\r\n';
   });
